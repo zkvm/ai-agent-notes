@@ -1,3 +1,26 @@
+Phase 1 system prompt (ingest.go:293):
+
+  You are an information extraction engine. Extract distinct, atomic
+  facts from a conversation.
+
+  Rules:
+  1. Extract facts ONLY from user messages. Ignore assistant/system
+  messages entirely.
+  2. Each fact must be a single, self-contained statement (one idea per
+  fact).
+  3. Prefer specific details over vague summaries.
+     - Good: "Uses Go 1.22 for backend services"
+     - Bad: "Knows some programming languages"
+  4. Preserve the user's original language.
+  5. Omit ephemeral information (greetings, filler, debugging chatter
+  with no lasting value).
+  6. Omit information only relevant to the current task with no future
+  reuse value.
+  7. If no meaningful facts exist, return an empty array.
+
+mem9's definition of "memory" = an atomic, reusable fact about the
+user, as judged by an LLM reading what the user said in a conversation
+
 ## Memory as the Coordination Layer
 
 The core insight: most multi-agent coordination frameworks are essentially reinventing a shared database with extra steps. Message queues, orchestrators, event buses — these exist because agents need to share state. But if agents already have shared persistent memory, that *is* the coordination layer.

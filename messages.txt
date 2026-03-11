@@ -1,0 +1,16 @@
+---
+  The relationship diagram
+
+  You (Telegram) ──sends──► agent run
+                                 │
+                                 ├── API call 1 (LLM thinks, calls a tool)
+                                 ├── API call 2 (LLM reads tool result, calls another)
+                                 └── API call N (LLM gives final answer)
+                                          │
+                                 context window check per call
+                                          │
+                                 if too full → compaction
+                                 (summarizes old messages in-place in session JSONL)
+
+  Session JSONL ──grows over many runs──► eventually compacted
+  Memory files  ──written by agent anytime──► indexed in SQLite for future retrieval

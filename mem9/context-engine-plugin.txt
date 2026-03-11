@@ -1,0 +1,103 @@
+The design doc is candid: mem9 does NOT take the context-engine slot as MVP. It registers
+  the implementation but stays in hook mode by default. The context-engine code is ready but
+  opt-in only.
+
+  ---
+  The createMem9ContextEngine implementation (context-engine.ts)
+
+  ingest() / ingestBatch()
+
+  Send messages to the mem9 backend immediately using mode: "smart" — the server does LLM
+  extraction and reconciliation asynchronously.
+
+  afterTurn() — the most important one
+
+  const start = params.prePromptMessageCount ?? 0;
+  const delta = params.messages.slice(start);  // only NEW messages from this turn
+  await ingestTurnMessages(backend, resolveAgentId, params.sessionId, delta);
+  Uses prePromptMessageCount (OpenClaw tells you how many messages existed before the prompt)
+   to extract only the new messages generated during this turn, then ingests just those to
+  mem9. Clean — avoids re-ingesting history.
+
+  assemble() — intentional no-op
+
+  async assemble(params): Promise<AssembleResult> {
+    return {
+      messages: params.messages,           // pass-through, unchanged
+      estimatedTokens: params.messages.length * 80,  // rough estimate
+    };
+  }
+  No RAG injection here. Memory recall still happens via the before_prompt_build hook, not
+  through assemble. This was a deliberate choice — they didn't want to own retrieval +
+  injection via the context-engine slot yet.
+
+  compact() — delegates to legacy
+
+  async compact(params): Promise<CompactResult> {
+    const delegated = await tryLegacyCompact(params);  // dynamic import of OpenClaw's
+  LegacyContextEngine
+    if (delegated) return delegated;
+    return { ok: true, compacted: false, reason: "legacy_compact_unavailable" };
+  }
+  tryLegacyCompact tries to import("openclaw/context-engine/legacy") and call OpenClaw's own
+  LegacyContextEngine.compact(). This is why they could implement the context-engine at all —
+   they didn't have to write a compactor, they just re-use OpenClaw's. If the import fails,
+  it returns compacted: false (silently skips).
+
+  ---
+  Registration logic (index.ts)
+
+  const supportsBeta1Hooks = typeof api.registerContextEngine === "function";
+  const contextEngineSlot = api.config?.plugins?.slots?.contextEngine;
+  const contextEngineActive = supportsBeta1Hooks && contextEngineSlot === "mem9";
+
+  if (supportsBeta1Hooks) {
+    registerContextEngine("mem9", () => createMem9ContextEngine(...));
+  }
+
+  registerHooks(api, hookBackend, api.logger, {
+    enableAgentEndIngest: !contextEngineActive,  // disable hook ingest if engine is active
+    ...
+  });
+
+  Two modes depending on config:
+
+  ┌───────────────┬──────────────────────────────┬──────────────────────┬───────────────┐
+  │     Mode      │             When             │    Memory recall     │ Memory ingest │
+  ├───────────────┼──────────────────────────────┼──────────────────────┼───────────────┤
+  │ Hook mode     │ slot ≠ "mem9"                │ before_prompt_build  │ agent_end     │
+  │ (default)     │                              │ hook                 │ hook          │
+  ├───────────────┼──────────────────────────────┼──────────────────────┼───────────────┤
+  │ ContextEngine │ plugins.slots.contextEngine  │ before_prompt_build  │ afterTurn()   │
+  │  mode         │ = "mem9"                     │ hook (still)         │ in context    │
+  │               │                              │                      │ engine        │
+  └───────────────┴──────────────────────────────┴──────────────────────┴───────────────┘
+
+  Note: even in ContextEngine mode, recall still goes through the hook (before_prompt_build),
+   not through assemble(). The engine only takes over ingest (afterTurn), not retrieval.
+
+  ---
+  Why they deferred assemble() RAG
+
+  The design doc is explicit:
+
+  compact() is required once mnemos becomes the active ContextEngine. OpenClaw does not
+  automatically fall back to legacy compaction after slot takeover.
+
+  Their blocker wasn't retrieval — it was compaction ownership. The tryLegacyCompact trick
+  solves that, so technically they could enable ContextEngine mode now. But they chose to
+  keep it opt-in for this MVP because the behavior in production (long sessions, manual
+  /compact) hasn't been validated yet.
+
+  ---
+  Summary
+
+  mem9's context-engine is a thin ingest adapter, not a full RAG engine:
+  - afterTurn = new message ingest to mem9 server (the real value)
+  - assemble = pass-through (no retrieval, no filtering)
+  - compact = delegates to OpenClaw's own legacy compactor
+  - Memory injection still happens via hook, not via context-engine
+
+  The architecture is sound for a first version — they're using the context-engine slot to
+  get reliable, clean afterTurn ingest with proper session identity, while deferring the
+  harder problem of assemble()-based RAG retrieval to a future release.

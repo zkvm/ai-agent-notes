@@ -1,0 +1,47 @@
+  ---
+  Without a marketplace config, installation comes down to two options:
+
+  Option 1: Manual copy/clone (always works)
+
+  # Clone the repo
+  git clone https://github.com/matrixport/skills.git
+
+  # Copy the skill to your personal Claude Code skills directory
+  cp -r skills/matrixport/skills/skills/matrixport/us-equity ~/.claude/skills/us-equity
+
+  That's it. Claude Code automatically scans ~/.claude/skills/ (global) and .claude/skills/
+  (project-level). The skill becomes available immediately.
+
+  Option 2: npx skills add (agentskills CLI by Vercel)
+
+  npx skills add matrixport/skills --skill skills/matrixport/us-equity
+
+  Under the hood it:
+  1. Clones the GitHub repo to a temp location
+  2. Finds the skill directory you specified
+  3. Copies it to .claude/skills/us-equity/ (project) or ~/.claude/skills/us-equity/ (global
+  with -g)
+
+  It's just automating the manual copy — no registry, no server, just git clone + file copy.
+
+  ---
+  So in plain terms
+
+  The plugin marketplace system exists purely to give users a nicer one-liner (/plugin
+  install). Without it, the underlying mechanism is simply "copy the skill directory to the
+  right place."
+
+  Your repo structure is already correct. The install story for users is just:
+  npx skills add matrixport/skills --skill skills/matrixport/us-equity
+  or a manual clone. No marketplace config needed unless you want the Claude Code /plugin
+  install UX.
+
+  ---
+  Claude Code plugin marketplace
+
+  /plugin marketplace add matrixport/skills
+  /plugin install us-equity@matrixport-skills
+  A marketplace is just a GitHub repo with a marketplace.json catalog file. That catalog
+  lists plugins (each plugin can contain one or more skills). Claude Code fetches the
+  catalog, then fetches and installs the referenced plugin. No registry, no server — just
+  GitHub.

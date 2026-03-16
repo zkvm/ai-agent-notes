@@ -1,0 +1,111 @@
+1. What is context-engine?
+
+  It's a pluggable lifecycle interface (src/context-engine/types.ts) that controls how
+  messages are managed around each agent run. Not per-API-call exactly — it's per-agent-run,
+  but the critical assemble() hook fires right before the actual LLM API call is made.
+
+  There's only one real implementation today: LegacyContextEngine
+  (src/context-engine/legacy.ts), which is mostly a pass-through. The whole interface exists
+  as an extension seam — third-party engines can plug in via
+  config.plugins.slots.contextEngine.
+
+  Lifecycle hooks (in order per run):
+
+  ┌───────────────────┬─────────────────────┬────────────────────────────────────────────┐
+  │       Hook        │        When         │                What it does                │
+  ├───────────────────┼─────────────────────┼────────────────────────────────────────────┤
+  │ bootstrap()       │ Start of run, if    │ Init engine state, import history          │
+  │                   │ session file exists │                                            │
+  ├───────────────────┼─────────────────────┼────────────────────────────────────────────┤
+  │ ingest() /        │ After messages      │ Index/store messages in engine             │
+  │ ingestBatch()     │ arrive              │                                            │
+  ├───────────────────┼─────────────────────┼────────────────────────────────────────────┤
+  │                   │ Right before the    │ Returns the final message list and         │
+  │ assemble()        │ LLM API call        │ optional system prompt addition sent to    │
+  │                   │                     │ the model                                  │
+  ├───────────────────┼─────────────────────┼────────────────────────────────────────────┤
+  │ afterTurn()       │ After the run       │ Post-turn compaction, persistence,         │
+  │                   │ completes           │ background work                            │
+  ├───────────────────┼─────────────────────┼────────────────────────────────────────────┤
+  │ compact()         │ On overflow or      │ Summarize/prune to reduce token usage      │
+  │                   │ proactive trigger   │                                            │
+  ├───────────────────┼─────────────────────┼────────────────────────────────────────────┤
+  │ dispose()         │ Run cleanup         │ Free resources                             │
+  └───────────────────┴─────────────────────┴────────────────────────────────────────────┘
+
+  The assemble() hook is the most powerful one — it directly controls what the model sees:
+
+  // run/attempt.ts
+  const assembled = await contextEngine.assemble({
+    sessionId,
+    messages: activeSession.messages,  // all current messages
+    tokenBudget,
+  });
+
+  // engine can return a different/filtered/reordered set
+  activeSession.agent.replaceMessages(assembled.messages);
+
+  // engine can inject extra system prompt text
+  if (assembled.systemPromptAddition) {
+    systemPromptText = prependSystemPromptAddition(...);
+  }
+
+  So an advanced context-engine could, for example, drop irrelevant old messages and inject a
+   semantic retrieval result — and the model would never know the difference.
+
+  ---
+  2. How memory is involved
+
+  Right now: memory and context-engine are independent systems. They don't directly call each
+   other in current code.
+
+  But the design clearly anticipates them working together:
+
+  memory system (src/memory/)
+    - indexes workspace files + session transcripts in SQLite + vector DB
+    - can semantically search across all history
+    - two "sources": "memory" (agent-written files) + "sessions" (chat JSONL)
+
+  context-engine (src/context-engine/)
+    - controls what messages go into the LLM prompt
+    - assemble() could query memory to retrieve relevant chunks
+
+  The LegacyContextEngine.assemble() is a no-op pass-through today. A RAG-style
+  context-engine would use assemble() to:
+  1. Take the current tokenBudget
+  2. Search memory for semantically relevant past messages/facts
+  3. Replace or augment messages with retrieved chunks
+  4. Return a pruned+enriched set that fits the budget
+
+  The afterTurn() hook is where an engine would write to memory — e.g., after a run, extract
+  key facts and persist them so future assemble() calls can retrieve them.
+
+  ---
+  Overall flow with context-engine in place
+
+  agent run starts
+    │
+    ├── bootstrap()          ← init, import history
+    │
+    │   [messages accumulate during run]
+    │
+    ├── assemble()           ← RIGHT BEFORE LLM API call
+    │     returns filtered/augmented messages + optional system prompt
+    │     (this is where RAG/memory retrieval would happen)
+    │
+    ├── LLM API call         ← uses assembled messages
+    │
+    ├── afterTurn()          ← post-run: compact, persist, index
+    │
+    └── compact()            ← if overflow detected at any point
+
+  One extra detail: if an engine sets ownsCompaction: true in its info, pi-coding-agent's
+  internal auto-compaction is disabled entirely (pi-settings.ts:102-106) — the engine takes
+  full ownership of when and how compaction happens.
+
+  ---
+  TL;DR: context-engine is a lifecycle abstraction around each run that lets different
+  strategies control what the model sees (assemble) and what happens after
+  (afterTurn/compact). Memory is a separate retrieval system that a future smart
+  context-engine would query inside assemble() to do RAG — pulling relevant facts from disk
+  instead of stuffing the entire message history into the prompt.

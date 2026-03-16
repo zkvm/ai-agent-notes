@@ -1,0 +1,32 @@
+---
+  The core difference
+
+  ┌───────────────────────┬──────────────────────────────┬────────────────────────────────────────────┐
+  │                       │        curl in skill         │                    MCP                     │
+  ├───────────────────────┼──────────────────────────────┼────────────────────────────────────────────┤
+  │ API discovery         │ Hardcoded in skill file      │ Server advertises its own tools            │
+  ├───────────────────────┼──────────────────────────────┼────────────────────────────────────────────┤
+  │ Parameter knowledge   │ Must be written out          │ Claude infers from schema                  │
+  ├───────────────────────┼──────────────────────────────┼────────────────────────────────────────────┤
+  │ Auth                  │ Embedded or manually managed │ Handled by MCP server/transport layer      │
+  ├───────────────────────┼──────────────────────────────┼────────────────────────────────────────────┤
+  │ Response parsing      │ Agent guesses field names    │ Structured, typed responses                │
+  ├───────────────────────┼──────────────────────────────┼────────────────────────────────────────────┤
+  │ Vendor changes API    │ You rewrite the skill        │ Server updates its manifest                │
+  ├───────────────────────┼──────────────────────────────┼────────────────────────────────────────────┤
+  │ New capabilities      │ You update every skill       │ Server adds a new tool, all skills benefit │
+  ├───────────────────────┼──────────────────────────────┼────────────────────────────────────────────┤
+  │ Works with 11 vendors │ 11 different curl formats    │ One protocol, same calling convention      │
+  └───────────────────────┴──────────────────────────────┴────────────────────────────────────────────┘
+
+  ---
+  The deeper reason: agents need tools, not endpoints
+
+  curl gives you a pipe to bytes. MCP gives you callable tools with intent.
+
+  Claude doesn't execute curl commands by reasoning about HTTP — it calls tools by reasoning about what it needs. When building a DCF model, Claude thinks: "I need AAPL's 5-year revenue
+  history" → maps that intent to factset.get_financials(ticker="AAPL", years=5) → gets back clean structured data.
+
+  With curl, the skill would need to anticipate every possible data need and pre-write the exact HTTP call. With MCP, Claude discovers what's available and composes the right call itself.
+
+  MCP is to API endpoints what function signatures are to memory addresses — a higher-level abstraction that lets the agent reason about capability rather than mechanics.
